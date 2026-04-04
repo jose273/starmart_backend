@@ -159,24 +159,33 @@ async function queryOpenFoodFacts(code) {
 }
 
 // ── Main endpoint ─────────────────────────────────────────────────────────────
-router.get("/:code", authenticate, async (req, res) => {
+// Public route — no auth needed (just a product info lookup)
+router.get("/:code", async (req, res) => {
   const code = (req.params.code || "").trim();
 
   if (!code || code.length < 4) {
-    return res.status(400).json({ error: "Invalid barcode — must be at least 4 characters" });
+    return res.status(400).json({ error: "Invalid barcode" });
   }
 
-  // Run all in parallel — whoever has the product wins
+  console.log(`[Barcode] Looking up: ${code}`);
+  console.log(`[Barcode] GO_UPC_KEY set: ${!!process.env.GO_UPC_KEY}`);
+  console.log(`[Barcode] UPCITEMDB_KEY set: ${!!process.env.UPCITEMDB_KEY}`);
+
+  // Run all sources in parallel
   const [goUpc, upcItemDb, offResult] = await Promise.allSettled([
     queryGoUPC(code),
     queryUPCItemDB(code),
     queryOpenFoodFacts(code),
   ]);
 
+  console.log(`[Barcode] Go-UPC result:         ${goUpc.status === "fulfilled" ? (goUpc.value ? goUpc.value.name : "null") : "error: " + goUpc.reason}`);
+  console.log(`[Barcode] UPCItemDB result:      ${upcItemDb.status === "fulfilled" ? (upcItemDb.value ? upcItemDb.value.name : "null") : "error: " + upcItemDb.reason}`);
+  console.log(`[Barcode] Open Food Facts result: ${offResult.status === "fulfilled" ? (offResult.value ? offResult.value.name : "null") : "error: " + offResult.reason}`);
+
   const result =
-    (goUpc.status      === "fulfilled" && goUpc.value)      ||
-    (upcItemDb.status  === "fulfilled" && upcItemDb.value)  ||
-    (offResult.status  === "fulfilled" && offResult.value)  ||
+    (goUpc.status     === "fulfilled" && goUpc.value)     ||
+    (upcItemDb.status === "fulfilled" && upcItemDb.value) ||
+    (offResult.status === "fulfilled" && offResult.value) ||
     null;
 
   if (!result) {
@@ -184,22 +193,24 @@ router.get("/:code", authenticate, async (req, res) => {
       found:   false,
       barcode: code,
       message: "Product not found in any global database",
-      tip:     process.env.GO_UPC_KEY
-        ? "Try a different barcode format or check the barcode number."
-        : "Add GO_UPC_KEY to your .env for much better electronics coverage (free at go-upc.com/plans/api/trial)",
+      tip:     !process.env.GO_UPC_KEY
+        ? "GO_UPC_KEY not set in environment — add it for electronics coverage"
+        : "Barcode not in any database — try entering details manually",
     });
   }
 
+  console.log(`[Barcode] Found: "${result.name}" via ${result.source}`);
+
   res.json({
-    found:   true,
-    barcode: code,
+    found:       true,
+    barcode:     code,
     name:        result.name.trim(),
-    brand:       result.brand.trim(),
-    description: result.description,
-    category:    result.category,
-    image:       result.image,
+    brand:       (result.brand || "").trim(),
+    description: result.description || "",
+    category:    result.category    || "Other",
+    image:       result.image       || null,
     source:      result.source,
-    confidence:  result.confidence,
+    confidence:  result.confidence  || "high",
   });
 });
 
